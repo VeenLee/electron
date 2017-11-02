@@ -6,19 +6,17 @@
 
 #include <string>
 
-#include "atom_natives.h"  // NOLINT: This file is generated with js2c
-
 #include "atom/common/api/api_messages.h"
+#include "atom/common/api/atom_bindings.h"
 #include "atom/common/native_mate_converters/string16_converter.h"
+#include "atom/common/native_mate_converters/v8_value_converter.h"
 #include "atom/common/native_mate_converters/value_converter.h"
-#include "atom/common/node_includes.h"
 #include "atom/common/options_switches.h"
 #include "atom/renderer/api/atom_api_renderer_ipc.h"
 #include "atom/renderer/atom_render_view_observer.h"
 #include "base/command_line.h"
 #include "chrome/renderer/printing/print_web_view_helper.h"
 #include "content/public/renderer/render_frame.h"
-#include "content/public/renderer/render_frame_observer.h"
 #include "content/public/renderer/render_view.h"
 #include "content/public/renderer/render_view_observer.h"
 #include "ipc/ipc_message_macros.h"
@@ -29,6 +27,9 @@
 #include "third_party/WebKit/public/web/WebLocalFrame.h"
 #include "third_party/WebKit/public/web/WebScriptSource.h"
 #include "third_party/WebKit/public/web/WebView.h"
+
+#include "atom/common/node_includes.h"
+#include "atom_natives.h"  // NOLINT: This file is generated with js2c
 
 namespace atom {
 
@@ -79,79 +80,46 @@ v8::Local<v8::Value> GetBinding(v8::Isolate* isolate, v8::Local<v8::String> key,
   return exports;
 }
 
+base::CommandLine::StringVector GetArgv() {
+  return base::CommandLine::ForCurrentProcess()->argv();
+}
+
 void InitializeBindings(v8::Local<v8::Object> binding,
                         v8::Local<v8::Context> context) {
   auto isolate = context->GetIsolate();
   mate::Dictionary b(isolate, binding);
   b.SetMethod("get", GetBinding);
+  b.SetMethod("crash", AtomBindings::Crash);
+  b.SetMethod("hang", AtomBindings::Hang);
+  b.SetMethod("getArgv", GetArgv);
+  b.SetMethod("getProcessMemoryInfo", &AtomBindings::GetProcessMemoryInfo);
+  b.SetMethod("getSystemMemoryInfo", &AtomBindings::GetSystemMemoryInfo);
 }
-
-class AtomSandboxedRenderFrameObserver : public content::RenderFrameObserver {
- public:
-  AtomSandboxedRenderFrameObserver(content::RenderFrame* frame,
-                                   AtomSandboxedRendererClient* renderer_client)
-      : content::RenderFrameObserver(frame),
-        render_frame_(frame),
-        world_id_(-1),
-        renderer_client_(renderer_client) {}
-
-  // content::RenderFrameObserver:
-  void DidClearWindowObject() override {
-    // Make sure every page will get a script context created.
-    render_frame_->GetWebFrame()->executeScript(
-        blink::WebScriptSource("void 0"));
-  }
-
-  void DidCreateScriptContext(v8::Handle<v8::Context> context,
-                              int extension_group,
-                              int world_id) override {
-    if (world_id_ != -1 && world_id_ != world_id)
-      return;
-    world_id_ = world_id;
-    renderer_client_->DidCreateScriptContext(context, render_frame_);
-  }
-
-  void WillReleaseScriptContext(v8::Local<v8::Context> context,
-                                int world_id) override {
-    if (world_id_ != world_id)
-      return;
-    renderer_client_->WillReleaseScriptContext(context, render_frame_);
-  }
-
-  void OnDestruct() override {
-    delete this;
-  }
-
- private:
-  content::RenderFrame* render_frame_;
-  int world_id_;
-  AtomSandboxedRendererClient* renderer_client_;
-
-  DISALLOW_COPY_AND_ASSIGN(AtomSandboxedRenderFrameObserver);
-};
 
 class AtomSandboxedRenderViewObserver : public AtomRenderViewObserver {
  public:
   AtomSandboxedRenderViewObserver(content::RenderView* render_view,
                                   AtomSandboxedRendererClient* renderer_client)
     : AtomRenderViewObserver(render_view, nullptr),
+    v8_converter_(new atom::V8ValueConverter),
     renderer_client_(renderer_client) {
+      v8_converter_->SetDisableNode(true);
     }
 
  protected:
   void EmitIPCEvent(blink::WebFrame* frame,
                     const base::string16& channel,
                     const base::ListValue& args) override {
-    if (!frame || frame->isWebRemoteFrame())
+    if (!frame || frame->IsWebRemoteFrame())
       return;
 
-    auto isolate = blink::mainThreadIsolate();
+    auto isolate = blink::MainThreadIsolate();
     v8::HandleScope handle_scope(isolate);
-    auto context = frame->mainWorldScriptContext();
+    auto context = frame->MainWorldScriptContext();
     v8::Context::Scope context_scope(context);
     v8::Local<v8::Value> argv[] = {
       mate::ConvertToV8(isolate, channel),
-      mate::ConvertToV8(isolate, args)
+      v8_converter_->ToV8Value(&args, context)
     };
     renderer_client_->InvokeIpcCallback(
         context,
@@ -160,6 +128,7 @@ class AtomSandboxedRenderViewObserver : public AtomRenderViewObserver {
   }
 
  private:
+  std::unique_ptr<atom::V8ValueConverter> v8_converter_;
   AtomSandboxedRendererClient* renderer_client_;
   DISALLOW_COPY_AND_ASSIGN(AtomSandboxedRenderViewObserver);
 };
@@ -175,13 +144,13 @@ AtomSandboxedRendererClient::~AtomSandboxedRendererClient() {
 
 void AtomSandboxedRendererClient::RenderFrameCreated(
     content::RenderFrame* render_frame) {
-  new AtomSandboxedRenderFrameObserver(render_frame, this);
-  new printing::PrintWebViewHelper(render_frame);
+  RendererClientBase::RenderFrameCreated(render_frame);
 }
 
 void AtomSandboxedRendererClient::RenderViewCreated(
     content::RenderView* render_view) {
   new AtomSandboxedRenderViewObserver(render_view, this);
+  RendererClientBase::RenderViewCreated(render_view);
 }
 
 void AtomSandboxedRendererClient::DidCreateScriptContext(
@@ -200,7 +169,7 @@ void AtomSandboxedRendererClient::DidCreateScriptContext(
   std::string preload_bundle_native(node::preload_bundle_data,
       node::preload_bundle_data + sizeof(node::preload_bundle_data));
   std::stringstream ss;
-  ss << "(function(binding, preloadPath) {\n";
+  ss << "(function(binding, preloadPath, require) {\n";
   ss << preload_bundle_native << "\n";
   ss << "})";
   std::string preload_wrapper = ss.str();
@@ -212,6 +181,7 @@ void AtomSandboxedRendererClient::DidCreateScriptContext(
   // Create and initialize the binding object
   auto binding = v8::Object::New(isolate);
   InitializeBindings(binding, context);
+  AddRenderBindings(isolate, binding);
   v8::Local<v8::Value> args[] = {
     binding,
     mate::ConvertToV8(isolate, preload_script)
@@ -230,7 +200,7 @@ void AtomSandboxedRendererClient::WillReleaseScriptContext(
 
 void AtomSandboxedRendererClient::InvokeIpcCallback(
     v8::Handle<v8::Context> context,
-    std::string callback_name,
+    const std::string& callback_name,
     std::vector<v8::Handle<v8::Value>> args) {
   auto isolate = context->GetIsolate();
   auto binding_key = mate::ConvertToV8(isolate, kIpcKey)->ToString();
@@ -246,7 +216,7 @@ void AtomSandboxedRendererClient::InvokeIpcCallback(
   auto callback_value = binding->Get(callback_key);
   DCHECK(callback_value->IsFunction());  // set by sandboxed_renderer/init.js
   auto callback = v8::Handle<v8::Function>::Cast(callback_value);
-  ignore_result(callback->Call(context, binding, args.size(), &args[0]));
+  ignore_result(callback->Call(context, binding, args.size(), args.data()));
 }
 
 }  // namespace atom

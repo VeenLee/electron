@@ -212,6 +212,7 @@ struct Converter<atom::VerifyRequestParams> {
     dict.Set("hostname", val.hostname);
     dict.Set("certificate", val.certificate);
     dict.Set("verificationResult", val.default_result);
+    dict.Set("errorCode", val.error_code);
     return dict.GetHandle();
   }
 };
@@ -233,7 +234,7 @@ class ResolveProxyHelper {
  public:
   ResolveProxyHelper(AtomBrowserContext* browser_context,
                      const GURL& url,
-                     Session::ResolveProxyCallback callback)
+                     const Session::ResolveProxyCallback& callback)
       : callback_(callback),
         original_thread_(base::ThreadTaskRunnerHandle::Get()) {
     scoped_refptr<net::URLRequestContextGetter> context_getter =
@@ -432,7 +433,9 @@ void DownloadIdCallback(content::DownloadManager* download_manager,
       last_modified, offset, length, std::string(),
       content::DownloadItem::INTERRUPTED,
       content::DownloadDangerType::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
-      content::DOWNLOAD_INTERRUPT_REASON_NETWORK_TIMEOUT, false);
+      content::DOWNLOAD_INTERRUPT_REASON_NETWORK_TIMEOUT, false,
+      base::Time(), false,
+      std::vector<content::DownloadItem::ReceivedSlice>());
 }
 
 }  // namespace

@@ -50,7 +50,7 @@ class CertVerifierRequest : public AtomCertVerifier::Request {
         first_response_(true),
         weak_ptr_factory_(this) {}
 
-  ~CertVerifierRequest() {
+  ~CertVerifierRequest() override {
     cert_verifier_->RemoveRequest(params_);
     default_verifier_request_.reset();
     while (!response_list_.empty() && !first_response_) {
@@ -92,6 +92,7 @@ class CertVerifierRequest : public AtomCertVerifier::Request {
     std::unique_ptr<VerifyRequestParams> request(new VerifyRequestParams());
     request->hostname = params_.hostname();
     request->default_result = net::ErrorToString(error);
+    request->error_code = error;
     request->certificate = params_.certificate();
     BrowserThread::PostTask(
         BrowserThread::UI, FROM_HERE,
